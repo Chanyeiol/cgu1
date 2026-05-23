@@ -1,0 +1,8 @@
+flask
+yfinance
+pandas
+matplotlib
+seaborn
+numpy
+sqlalchemy
+pymssql
