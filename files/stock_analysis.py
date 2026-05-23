@@ -1,10 +1,8 @@
 """
-TSMC vs Quanta Stock Correlation Analysis – Web Service
+TSMC vs Quanta Stock Correlation Analysis – Streamlit App
 """
 
-import base64
 import io
-import os
 import warnings
 from datetime import datetime, timedelta
 
@@ -15,8 +13,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import streamlit as st
 import yfinance as yf
-from flask import Flask
 from sqlalchemy import create_engine
 
 warnings.filterwarnings("ignore")
@@ -35,7 +33,8 @@ DB_URL = (
 )
 
 
-# ── 1. Fetch prices ───────────────────────────────────────────────────────────
+# ── Functions ─────────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner="抓取股價資料中…")
 def fetch_prices() -> pd.DataFrame:
     frames = {}
     for name, ticker in STOCKS.items():
@@ -49,7 +48,6 @@ def fetch_prices() -> pd.DataFrame:
     return df
 
 
-# ── 2. Save to SQL Server ─────────────────────────────────────────────────────
 def save_to_db(df: pd.DataFrame) -> None:
     engine = create_engine(DB_URL)
     df_reset = df.reset_index()
@@ -67,7 +65,6 @@ def save_to_db(df: pd.DataFrame) -> None:
     meta.to_sql("stock_analysis_meta", engine, if_exists="replace", index=False)
 
 
-# ── 3. Compute metrics ────────────────────────────────────────────────────────
 def compute_metrics(df: pd.DataFrame):
     pearson = df["TSMC"].corr(df["Quanta"])
     rolling = df["TSMC"].rolling(ROLL_WINDOW).corr(df["Quanta"])
@@ -75,9 +72,8 @@ def compute_metrics(df: pd.DataFrame):
     return pearson, rolling, returns
 
 
-# ── 4. Plot (returns PNG bytes) ───────────────────────────────────────────────
 def plot_charts(df: pd.DataFrame, pearson: float,
-                rolling: pd.Series, returns: pd.DataFrame) -> bytes:
+                rolling: pd.Series, returns: pd.DataFrame):
     sns.set_theme(style="whitegrid", palette="muted")
     fig = plt.figure(figsize=(16, 14))
     fig.suptitle(
@@ -93,12 +89,10 @@ def plot_charts(df: pd.DataFrame, pearson: float,
     ax1.plot(df.index, df["TSMC"],   color=color_tsmc,   lw=1.5, label="TSMC")
     ax1.set_ylabel("TSMC Close (TWD)", color=color_tsmc, fontsize=11)
     ax1.tick_params(axis="y", labelcolor=color_tsmc)
-
     ax1b = ax1.twinx()
     ax1b.plot(df.index, df["Quanta"], color=color_quanta, lw=1.5, label="Quanta")
     ax1b.set_ylabel("Quanta Close (TWD)", color=color_quanta, fontsize=11)
     ax1b.tick_params(axis="y", labelcolor=color_quanta)
-
     ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
     ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
     plt.setp(ax1.xaxis.get_majorticklabels(), rotation=30, ha="right")
@@ -149,42 +143,31 @@ def plot_charts(df: pd.DataFrame, pearson: float,
     ax4.legend(loc="lower right", fontsize=10)
 
     plt.tight_layout(rect=[0, 0, 1, 0.96])
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight")
-    plt.close()
-    buf.seek(0)
-    return buf.read()
+    return fig
 
 
-# ── Flask app ─────────────────────────────────────────────────────────────────
-flask_app = Flask(__name__)
+# ── Streamlit UI ──────────────────────────────────────────────────────────────
+st.set_page_config(page_title="股價關聯性分析", layout="wide")
+st.title("台積電 vs 廣達 股價關聯性分析")
+st.caption(f"資料期間：{START_DATE} ～ {END_DATE}")
 
-@flask_app.route("/")
-def index():
-    try:
-        df = fetch_prices()
+if st.button("重新分析", type="primary"):
+    st.cache_data.clear()
+
+try:
+    df = fetch_prices()
+    pearson, rolling, returns = compute_metrics(df)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Pearson 相關係數", f"{pearson:.4f}")
+    col2.metric("資料筆數", f"{len(df)} 個交易日")
+    col3.metric("30日滾動相關（最新）", f"{rolling.dropna().iloc[-1]:.4f}")
+
+    with st.spinner("存入資料庫…"):
         save_to_db(df)
-        pearson, rolling, returns = compute_metrics(df)
-        chart_b64 = base64.b64encode(plot_charts(df, pearson, rolling, returns)).decode()
-        return f"""<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-  <meta charset="utf-8">
-  <title>TSMC vs Quanta Correlation</title>
-  <style>body{{font-family:sans-serif;max-width:1200px;margin:0 auto;padding:20px}}</style>
-</head>
-<body>
-  <h1>台積電 vs 廣達 股價關聯性分析</h1>
-  <p>資料期間：{START_DATE} ～ {END_DATE}</p>
-  <p>Pearson 相關係數：<strong>{pearson:.4f}</strong>　　資料筆數：{len(df)} 個交易日</p>
-  <p><a href="/">重新分析</a></p>
-  <img src="data:image/png;base64,{chart_b64}" style="max-width:100%">
-</body>
-</html>"""
-    except Exception as exc:
-        return f"<h1>Error</h1><pre>{exc}</pre>", 500
+    st.success("資料已存入 SQL Server（gemio.stock_daily_close）")
 
+    st.pyplot(plot_charts(df, pearson, rolling, returns))
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    flask_app.run(host="0.0.0.0", port=port)
+except Exception as exc:
+    st.error(f"錯誤：{exc}")
