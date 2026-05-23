@@ -27,9 +27,9 @@ STOCKS = {
 END_DATE    = datetime.today().strftime("%Y-%m-%d")
 START_DATE  = (datetime.today() - timedelta(days=730)).strftime("%Y-%m-%d")
 ROLL_WINDOW = 30
-DB_URL = (
-    "mssql+pymssql://sa:7TH5AIxg3N9jBcXsdJqZ4o6V82t10mpv"
-    "@43.153.159.36:30147/gemio"
+DB_URL = st.secrets.get(
+    "DB_URL",
+    "mssql+pymssql://sa:7TH5AIxg3N9jBcXsdJqZ4o6V82t10mpv@43.153.159.36:30147/gemio"
 )
 
 
